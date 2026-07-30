@@ -402,10 +402,23 @@
             white-space: nowrap; display: inline-block;
         }
         .btn-dl:hover { background: var(--orange-dark); }
+        .btn-dl:disabled,
+        .btn-dl.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: #999;
+            pointer-events: none;
+        }
         .btn-ghost {
             padding: 6px 9px; background: none; border: 1px solid var(--border);
             border-radius: 7px; font-size: 0.75rem; color: var(--text-muted); cursor: pointer;
             white-space: nowrap;
+        }
+        .btn-ghost:disabled,
+        .btn-ghost.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
         }
         .mini-progress {
             height: 3px; background: rgba(255,107,0,0.12);
@@ -888,6 +901,16 @@ function formatSize(bytes) {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
     return (bytes / 1024 / 1024).toFixed(1) + " MB";
 }
+function isExpired(expiresAt) {
+    if (!expiresAt) return false;
+    let s = expiresAt;
+    if (!s.endsWith("Z") && !s.includes("+") && !/[+-]\d{2}:\d{2}$/.test(s)) {
+        s += "Z";
+    }
+    const end = new Date(s).getTime();
+    const diff = end - Date.now();
+    return isNaN(diff) || diff <= 0;
+}
 function expiresText(expiresAt) {
     if (!expiresAt) return "";
     let s = expiresAt;
@@ -944,6 +967,7 @@ function renderHistory() {
         const size = okFiles.length === 1 ? formatSize(okFiles[0].size) : "";
         const quality = firstQuality(j.results) || (okFiles[0] && okFiles[0].quality) || "";
         const exp = ready ? expiresText(j.expires_at) : "";
+        const expired = ready && isExpired(j.expires_at);
         const count = j.is_playlist && j.total ? `${j.current || 0}/${j.total}` : "";
         const thumb = j.thumbnail || (j.url ? getYoutubeThumbnail(j.url) : null);
         const thumbHtml = thumb
@@ -966,9 +990,11 @@ function renderHistory() {
             </div>
             <div class="job-actions">
                 ${ready
-                    ? (okFiles.length === 1
-                        ? `<a class="btn-dl" href="${API_BASE}${okFiles[0].url}" download>Download</a>`
-                        : `<button class="btn-ghost" onclick="resumeJob('${j.id}')">Open</button>`)
+                    ? (expired
+                        ? `<button class="btn-dl" disabled>Expired</button>`
+                        : (okFiles.length === 1
+                            ? `<a class="btn-dl" href="${API_BASE}${okFiles[0].url}" download>Download</a>`
+                            : `<button class="btn-ghost" onclick="resumeJob('${j.id}')">Open</button>`))
                     : `<button class="btn-ghost" onclick="resumeJob('${j.id}')">${downloading ? "Watch" : "Retry"}</button>`
                 }
             </div>
