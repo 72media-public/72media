@@ -364,8 +364,14 @@
             width: 44px; height: 44px; border-radius: 9px; flex-shrink: 0;
             background: linear-gradient(135deg, #ff8c33, #ff6b00);
             display: flex; align-items: center; justify-content: center;
+            position: relative; overflow: hidden;
         }
-        .job-thumb svg { width: 18px; height: 18px; fill: #fff; }
+        .job-thumb img {
+            position: absolute; inset: 0;
+            width: 100%; height: 100%;
+            object-fit: cover; border-radius: 9px; z-index: 1;
+        }
+        .job-thumb svg { width: 18px; height: 18px; fill: #fff; position: relative; z-index: 0; }
         .job-info { flex: 1; min-width: 0; overflow: hidden; }
         .job-info h4 {
             font-size: 0.84rem; font-weight: 600;
@@ -807,6 +813,25 @@ function isPlaylistUrl(url) {
     return u.includes("list=") || u.includes("/playlist");
 }
 
+function getYoutubeThumbnail(url) {
+    if (!url || typeof url !== "string") return null;
+    const lower = url.toLowerCase();
+    if (!lower.includes("youtube.com") && !lower.includes("youtu.be") && !lower.includes("youtube-nocookie.com")) return null;
+    let id = null;
+    try {
+        const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|shorts\/|live\/|watch\?v=)|youtube-nocookie\.com\/(?:embed\/|v\/))([a-zA-Z0-9_-]{11})/);
+        if (m) id = m[1];
+        else {
+            const parsed = new URL(url.startsWith("http") ? url : "https://" + url);
+            if (parsed.searchParams.has("v")) id = parsed.searchParams.get("v");
+        }
+    } catch (e) {}
+    if (id && /^[a-zA-Z0-9_-]{11}$/.test(id)) {
+        return `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+    }
+    return null;
+}
+
 function getHistory() {
     try { return JSON.parse(localStorage.getItem("yt_history_v2") || "[]"); }
     catch { return []; }
@@ -818,21 +843,27 @@ function upsertJob(job) {
     if (!job || !job.id) return;
     let list = getHistory();
     const idx = list.findIndex(j => j.id === job.id);
+    const prev = idx >= 0 ? list[idx] : {};
     const entry = {
         id: job.id,
-        title: job.title || "Untitled",
-        status: job.status || "unknown",
-        progress: job.progress || 0,
-        results: job.results || [],
-        is_playlist: !!job.is_playlist,
-        total: job.total || 0,
-        current: job.current || 0,
-        created_at: job.created_at || new Date().toISOString(),
-        expires_at: job.expires_at || null,
-        speed: job.speed || "",
-        eta: job.eta || "",
-        error: job.error || null
+        title: job.title || prev.title || "Untitled",
+        status: job.status || prev.status || "unknown",
+        progress: job.progress != null ? job.progress : (prev.progress || 0),
+        results: job.results || prev.results || [],
+        is_playlist: job.is_playlist != null ? !!job.is_playlist : !!prev.is_playlist,
+        total: job.total || prev.total || 0,
+        current: job.current || prev.current || 0,
+        created_at: job.created_at || prev.created_at || new Date().toISOString(),
+        expires_at: job.expires_at || prev.expires_at || null,
+        speed: job.speed || prev.speed || "",
+        eta: job.eta || prev.eta || "",
+        error: job.error || prev.error || null,
+        url: job.url || prev.url || null,
+        thumbnail: job.thumbnail || prev.thumbnail || null
     };
+    if (!entry.thumbnail && entry.url) {
+        entry.thumbnail = getYoutubeThumbnail(entry.url);
+    }
     if (idx >= 0) list[idx] = { ...list[idx], ...entry };
     else list.unshift(entry);
     saveHistory(list);
@@ -914,9 +945,13 @@ function renderHistory() {
         const quality = firstQuality(j.results) || (okFiles[0] && okFiles[0].quality) || "";
         const exp = ready ? expiresText(j.expires_at) : "";
         const count = j.is_playlist && j.total ? `${j.current || 0}/${j.total}` : "";
+        const thumb = j.thumbnail || (j.url ? getYoutubeThumbnail(j.url) : null);
+        const thumbHtml = thumb
+            ? `<img src="${thumb}" alt="" loading="lazy" onerror="this.remove()">`
+            : "";
         return `
         <div class="job-item">
-            <div class="job-thumb"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+            <div class="job-thumb">${thumbHtml}<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
             <div class="job-info">
                 <h4 title="${(j.title || "").replace(/"/g, "&quot;")}">${j.title || "Untitled"}</h4>
                 <div class="job-meta">
@@ -962,9 +997,21 @@ function showActive(title, desc, progress, type, speed, eta, job) {
     document.getElementById("statusBadges").innerHTML = badges;
 }
 
-function showActiveResults(results) {
+function showActiveResults(results, job) {
     const box = document.getElementById("activeResults");
     if (!results || !results.length) { box.innerHTML = ""; return; }
+
+    let thumb = null;
+    let isPlaylist = false;
+    if (job) {
+        const fromHist = getHistory().find(x => x.id === job.id);
+        const merged = fromHist ? { ...fromHist, ...job } : job;
+        thumb = merged.thumbnail || (merged.url ? getYoutubeThumbnail(merged.url) : null);
+        isPlaylist = !!merged.is_playlist;
+    }
+    const readyCount = results.filter(r => r && r.url).length;
+    const showThumb = thumb && (!isPlaylist || readyCount <= 1);
+
     box.innerHTML = results.map(r => {
         if (r.skipped || r.error || !r.url) {
             return `
@@ -975,8 +1022,12 @@ function showActiveResults(results) {
                 </div>
             </div>`;
         }
+        const thumbHtml = showThumb
+            ? `<div class="job-thumb"><img src="${thumb}" alt="" loading="lazy" onerror="this.remove()"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>`
+            : "";
         return `
         <div class="job-item" style="margin-top:8px;">
+            ${thumbHtml}
             <div class="job-info">
                 <h4 title="${(r.title || "").replace(/"/g, "&quot;")}">${r.title}</h4>
                 <div class="job-meta">
@@ -1001,11 +1052,11 @@ function startSSE(jobId) {
             fetch(`${API_BASE}/api/status/${jobId}`).then(r => r.ok ? r.json() : null).then(job => {
                 if (job && job.status === "ready") {
                     showActive(job.is_playlist ? "Playlist ready" : "Downloaded", job.title, 100, "success", "", "", job);
-                    showActiveResults(job.results || []);
+                    showActiveResults(job.results || [], job);
                     upsertJob(job);
                 } else if (job && job.status === "error") {
                     showActive("Error", job.error || data.error, 0, "error");
-                    showActiveResults(job.results || []);
+                    showActiveResults(job.results || [], job);
                     upsertJob(job);
                 } else {
                     upsertJob({ id: jobId, status: "error", error: data.error, title: data.title || "Error" });
@@ -1023,17 +1074,17 @@ function startSSE(jobId) {
 
         if (data.status === "ready") {
             showActive(data.is_playlist ? "Playlist ready" : "Downloaded", data.title, 100, "success", "", "", data);
-            showActiveResults(data.results || []);
+            showActiveResults(data.results || [], data);
             eventSource.close();
         } else if (data.status === "error") {
             showActive("Error", data.error || "Failed", 0, "error");
-            showActiveResults(data.results || []);
+            showActiveResults(data.results || [], data);
             eventSource.close();
         } else {
             let desc = data.status || "";
             if (data.is_playlist && data.total) desc = `Downloading ${data.current || 0}/${data.total}`;
             showActive(data.title || "Downloading...", desc, data.progress || 0, "", data.speed, data.eta, data);
-            if (data.results && data.results.length) showActiveResults(data.results);
+            if (data.results && data.results.length) showActiveResults(data.results, data);
         }
     };
 
@@ -1048,16 +1099,16 @@ function startSSE(jobId) {
                 if (job.status === "ready") {
                     clearInterval(t);
                     showActive(job.is_playlist ? "Playlist ready" : "Downloaded", job.title, 100, "success", "", "", job);
-                    showActiveResults(job.results || []);
+                    showActiveResults(job.results || [], job);
                 } else if (job.status === "error") {
                     clearInterval(t);
                     showActive("Error", job.error || "Failed", 0, "error");
-                    showActiveResults(job.results || []);
+                    showActiveResults(job.results || [], job);
                 } else {
                     let desc = job.status || "";
                     if (job.is_playlist && job.total) desc = `Downloading ${job.current || 0}/${job.total}`;
                     showActive(job.title || "Downloading...", desc, job.progress || 0, "", job.speed, job.eta, job);
-                    if (job.results && job.results.length) showActiveResults(job.results);
+                    if (job.results && job.results.length) showActiveResults(job.results, job);
                 }
             }).catch(() => {});
             if (tries > 25) {
@@ -1153,6 +1204,7 @@ async function startDownloadRequest(payload) {
             throw new Error(err.detail || "Failed to start");
         }
         const data = await res.json();
+        const thumb = getYoutubeThumbnail(payload.url);
         upsertJob({
             id: data.job_id,
             title: "Starting...",
@@ -1160,7 +1212,9 @@ async function startDownloadRequest(payload) {
             progress: 0,
             results: [],
             expires_at: data.expires_at,
-            created_at: new Date().toISOString()
+            created_at: new Date().toISOString(),
+            url: payload.url,
+            thumbnail: thumb
         });
         showActive("Queued", "Starting download...", 1);
         startSSE(data.job_id);
